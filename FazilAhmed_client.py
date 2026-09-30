@@ -16,8 +16,21 @@ def connect():
     return s
 
 
+def send_start(sock, secure):
+    """Send the Start packet (SS) and return the server's reply."""
+    # The last field is 1 if secured communication is required, otherwise 0
+    flag = "1" if secure else "0"
+    packet = "(SS,RFMP,v1.0," + flag + ")"
+    sock.send(packet.encode())
+
+    # Wait for the Confirm-Connection packet (CC) from the server
+    reply = sock.recv(1024).decode()
+    return reply
+
+
 if __name__ == "__main__":
     sock = connect()
     print("Connected to server")
+    print("Server replied:", send_start(sock, False))
     # Always release the connection when done
     sock.close()
