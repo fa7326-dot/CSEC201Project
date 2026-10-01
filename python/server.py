@@ -1,13 +1,31 @@
 """RFMP Server - CSEC201 PROJECT 
 Author: Siyaa Sathyan (UID:433004781)
 """
-
+import socket
 host = "0.0.0.0"
 port = 9999
 
 def main():
-    #the below shows startup message for the server; f string inserts the host and port values into the string
-    print(f"Starting RFMP server on {host}:{port}")
+    # Create a TCP socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind((host, port)) 
+        s.listen(5)
+        print(f"Server listening on {host}:{port}")
+        
+        while True:
+            conn, addr = s.accept()  # Accept a new connection
+            print(f"Connected by {addr}")
+            data = conn.recv(2024)  # Receive data from the client
+            if not data:
+                conn.close()
+                continue
+            raw_packet = data.decode('utf-8')  # Decode the received bytes to string
+            ptype, fields = parse_packet(raw_packet)  # Parse the packet
+            print(f"Client sent: {raw_packet}")
+                
+            print(f"Parse: type={ptype}, fields={fields}") #
+
+            conn.close()
     
 
 def parse_packet(raw):
