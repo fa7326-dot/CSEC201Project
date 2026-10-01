@@ -16,6 +16,17 @@ def connect():
     return s
 
 
+def parse_packet(text):
+    """Split a packet like (CC,key) into a list of its fields."""
+    # Remove surrounding whitespace, then the opening and closing brackets
+    text = text.strip()
+    if text.startswith("(") and text.endswith(")"):
+        text = text[1:-1]
+
+    # Split on commas and trim any spaces around each field
+    return [field.strip() for field in text.split(",")]
+
+
 def send_start(sock, secure):
     """Send the Start packet (SS) and return the server's reply."""
     # The last field is 1 if secured communication is required, otherwise 0
@@ -31,6 +42,8 @@ def send_start(sock, secure):
 if __name__ == "__main__":
     sock = connect()
     print("Connected to server")
-    print("Server replied:", send_start(sock, False))
+    reply = send_start(sock, False)
+    print("Server replied:", reply)
+    print("Parsed fields:", parse_packet(reply))
     # Always release the connection when done
     sock.close()
