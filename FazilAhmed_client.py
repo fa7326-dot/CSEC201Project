@@ -4,8 +4,9 @@
 import socket
 import secrets
 from Crypto.PublicKey import RSA
-from Crypto.Cipher import PKCS1_OAEP
+from Crypto.Cipher import PKCS1_OAEP, AES
 from Crypto.Random import get_random_bytes
+from Crypto.Util.Padding import pad, unpad
 
 # Address and port of the RFMP server (localhost for testing)
 HOST = "127.0.0.1"
@@ -69,6 +70,67 @@ def encrypt_session_key(session_key, server_public_key):
     return cipher.encrypt(data)
 
 
+def caesar_shift(text, shift):
+    """Shift every letter in the text by the given amount."""
+    result = ""
+    for ch in text:
+        if ch.isalpha() and ch.isascii():
+            # Pick the starting point of the alphabet for this letter's case
+            base = ord("A") if ch.isupper() else ord("a")
+            result += chr((ord(ch) - base + shift) % 26 + base)
+        else:
+            # Digits, spaces and symbols are left unchanged
+            result += ch
+    return result
+
+
+def caesar_encrypt(text, shift):
+    """Encrypt text by shifting letters forward."""
+    return caesar_shift(text, shift)
+
+
+def caesar_decrypt(text, shift):
+    """Decrypt text by shifting letters backward."""
+    return caesar_shift(text, -shift)
+
+
+def aes_encrypt(text, key):
+    """Encrypt text with AES-CBC and return IV plus ciphertext as hex."""
+    # A fresh random IV is used for every message
+    iv = get_random_bytes(16)
+    cipher = AES.new(key, AES.MODE_CBC, iv)
+
+    # AES works on 16 byte blocks, so pad the text to a full block
+    ciphertext = cipher.encrypt(pad(text.encode(), AES.block_size))
+
+    # The IV is placed in front so the receiver can decrypt, hex keeps it text
+    return (iv + ciphertext).hex()
+
+
+def aes_decrypt(hex_text, key):
+    """Decrypt hex produced by aes_encrypt and return the original text."""
+    raw = bytes.fromhex(hex_text)
+
+    # The first 16 bytes are the IV, the rest is the ciphertext
+    iv, ciphertext = raw[:16], raw[16:]
+    cipher = AES.new(key, AES.MODE_CBC, iv)
+    return unpad(cipher.decrypt(ciphertext), AES.block_size).decode()
+
+
+def encrypt_text(text, algorithm, key):
+    """Encrypt text with whichever algorithm was chosen in setup."""
+    if algorithm == "AES":
+        return aes_encrypt(text, key)
+    return caesar_encrypt(text, key)
+
+
+def decrypt_text(text, algorithm, key):
+    """Decrypt text with whichever algorithm was chosen in setup."""
+    if algorithm == "AES":
+        return aes_decrypt(text, key)
+    return caesar_decrypt(text, key)
+
+
 def send_start(sock, secure):
     """Send the Start packet (SS) and return the server's reply."""
     # The last field is 1 if secured communication is required, otherwise 0
@@ -104,12 +166,15 @@ def secure_setup(sock, algorithm, username):
 
 
 if __name__ == "__main__":
-    sock = connect()
-    print("Connected to server")
+    # Local test of both ciphers, no server needed for this step
+    message = "Hello RFMP, file data 123!"
 
-    # Run the secured setup phase using AES
-    session_key, private_key = secure_setup(sock, "AES", USERNAME)
-    print("Secure setup finished, session key (hex):", session_key.hex())
+    caesar_key = generate_session_key("Caesar")
+    scrambled = encrypt_text(message, "Caesar", caesar_key)
+    print("Caesar encrypted:", scrambled)
+    print("Caesar decrypted:", decrypt_text(scrambled, "Caesar", caesar_key))
 
-    # Always release the connection when done
-    sock.close()
+    aes_key = generate_session_key("AES")
+    scrambled = encrypt_text(message, "AES", aes_key)
+    print("AES encrypted:", scrambled)
+    print("AES decrypted:", decrypt_text(scrambled, "AES", aes_key))
