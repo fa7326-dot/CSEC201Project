@@ -2,6 +2,9 @@
 # CSEC-201 socket project
 
 import socket
+import secrets
+from Crypto.PublicKey import RSA
+from Crypto.Random import get_random_bytes
 
 # Address and port of the RFMP server (localhost for testing)
 HOST = "127.0.0.1"
@@ -27,6 +30,28 @@ def parse_packet(text):
     return [field.strip() for field in text.split(",")]
 
 
+def generate_rsa_keys():
+    """Generate the client's RSA key pair and return (private, public)."""
+    # 2048 bits is the standard minimum size for RSA today
+    private_key = RSA.generate(2048)
+
+    # The public key is derived from the private key and can be shared
+    public_key = private_key.publickey()
+    return private_key, public_key
+
+
+def generate_session_key(algorithm):
+    """Create a random session key for the chosen algorithm."""
+    if algorithm == "AES":
+        # AES-128 uses a 16 byte key from a secure random source
+        return get_random_bytes(16)
+    elif algorithm == "Caesar":
+        # Caesar uses a shift from 1 to 25 (0 would change nothing)
+        return secrets.randbelow(25) + 1
+    else:
+        raise ValueError("Unknown algorithm: " + algorithm)
+
+
 def send_start(sock, secure):
     """Send the Start packet (SS) and return the server's reply."""
     # The last field is 1 if secured communication is required, otherwise 0
@@ -45,5 +70,14 @@ if __name__ == "__main__":
     reply = send_start(sock, False)
     print("Server replied:", reply)
     print("Parsed fields:", parse_packet(reply))
+
+    # Generate the client key pair and show the start of the public key
+    private_key, public_key = generate_rsa_keys()
+    print("Client public key starts with:", public_key.export_key().decode()[:30])
+
+    # Generate one session key for each algorithm to check they work
+    print("AES session key:", generate_session_key("AES").hex())
+    print("Caesar session key:", generate_session_key("Caesar"))
+
     # Always release the connection when done
     sock.close()
