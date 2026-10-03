@@ -2,8 +2,73 @@
 Author: Siyaa Sathyan (UID:433004781)
 """
 import socket
+import threading
 host = "0.0.0.0"
 port = 9999
+
+ERROR_CODES = {
+    "E01": "Unknown or malformed packet",
+    "E02": "File not found",
+    "E03": "Command failed",
+    "E04": "Encryption error",
+}
+
+
+class Client:
+    """Holds the info about a connected client."""
+    def __init__(self, conn, addr):
+        
+        self.conn = conn # the client socket
+        self.addr = addr # the client address
+        self.secure = False # this client encryption flag
+        self.algorithm = None # this client chosen algorithm
+        self.client_key = None # this client key
+        self.open_file = None # this client open file
+        
+def make_error(code):
+    return f"(EE,{code},{ERROR_CODES.get(code,'')})" # gives the error code and message E01, E02, E03, E04
+    
+def handle_start(client, fields):
+    """Handle the Start (SS) packet: (SS, RFMP, v1.0, 0|1)."""
+    if len(fields) < 3:
+        return make_error("E01")
+    protocol = fields[0]
+    version = fields[1]
+    wants_encryption = fields[2]
+    
+    if protocol != "RFMP":
+        return make_error("E01")
+    
+    if wants_encryption =="1":
+        client.secure = True
+        
+    #reply with confirmation packet: (SC, RFMP, v1.0, 0|1)
+    return "(CC)"
+    
+def handle_client(conn, addr):
+    """Serve one client connection"""
+    sess = Client(conn, addr)
+    print(f"Connected by {addr}")
+
+    while True:
+        data = sess.conn.recv(2024)
+        if not data:
+            break
+
+        raw_packet = data.decode("utf-8")  # bytes -> string
+        ptype, fields = parse_packet(raw_packet)
+        print(f"Client sent: {raw_packet}")
+
+        if ptype == "SS":
+            reply = handle_start(sess,fields)
+        else:
+            reply = make_error("E01")
+
+        sess.conn.sendall(reply.encode())
+
+    sess.conn.close()
+    print(f"Disconnected:{addr}")
+
 
 def main():
     # Create a TCP socket
@@ -14,19 +79,7 @@ def main():
         
         while True:
             conn, addr = s.accept()  # Accept a new connection
-            print(f"Connected by {addr}")
-            data = conn.recv(2024)  # Receive data from the client
-            if not data:
-                conn.close()
-                continue
-            raw_packet = data.decode('utf-8')  # Decode the received bytes to string
-            ptype, fields = parse_packet(raw_packet)  # Parse the packet
-            print(f"Client sent: {raw_packet}")
-                
-            print(f"Parse: type={ptype}, fields={fields}") #
-
-            conn.close()
-    
+            threading.Thread(target=handle_client, args=(conn, addr), daemon=True).start()
 
 def parse_packet(raw):
     # Implementation for parsing the raw packet data
