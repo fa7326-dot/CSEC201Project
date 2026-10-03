@@ -1,19 +1,32 @@
 # RFMP client (Remote File Management Protocol)
 # CSEC-201 socket project
+# Encryption is handled separately by the team (see the marked spots below)
 
 import socket
-import secrets
-from Crypto.PublicKey import RSA
-from Crypto.Cipher import PKCS1_OAEP, AES
-from Crypto.Random import get_random_bytes
-from Crypto.Util.Padding import pad, unpad
 
 # Address and port of the RFMP server (localhost for testing)
 HOST = "127.0.0.1"
 PORT = 8080
 
-# Username sent to the server inside the Encryption packet
-USERNAME = "nirvan"
+# Menu choice mapped to (label, packet kind, command, argument prompt)
+# A prompt of None means the command needs no argument
+COMMANDS = {
+    "1": ("mkdir (create a folder)", "prompt", "mkdir", "Folder name: "),
+    "2": ("cd (change directory)", "prompt", "cd", "Directory path: "),
+    "3": ("rmdir (delete a folder)", "prompt", "rmdir", "Folder name: "),
+    "4": ("del (delete a file)", "prompt", "del", "File name: "),
+    "5": ("ren (rename a folder)", "prompt", "ren",
+          "Old name and new name (separated by a space): "),
+    "6": ("openRead (read a server file)", "openRead", None,
+          "File name to read: "),
+    "7": ("openWrite (write a server file)", "openWrite", None,
+          "File name to write: "),
+    "8": ("whoami (current user)", "prompt", "whoami", None),
+    "9": ("hostname (server name)", "prompt", "hostname", None),
+    "10": ("echo (print text)", "prompt", "echo", "Text to echo: "),
+    "11": ("ls (list files)", "prompt", "ls", None),
+    "12": ("pwd (current folder)", "prompt", "pwd", None),
+}
 
 
 def connect():
@@ -35,146 +48,139 @@ def parse_packet(text):
     return [field.strip() for field in text.split(",")]
 
 
-def generate_rsa_keys():
-    """Generate the client's RSA key pair and return (private, public)."""
-    # 2048 bits is the standard minimum size for RSA today
-    private_key = RSA.generate(2048)
+def receive(sock):
+    """Read one reply from the server and return it as text."""
+    reply = sock.recv(65536).decode()
 
-    # The public key is derived from the private key and can be shared
-    public_key = private_key.publickey()
-    return private_key, public_key
-
-
-def generate_session_key(algorithm):
-    """Create a random session key for the chosen algorithm."""
-    if algorithm == "AES":
-        # AES-128 uses a 16 byte key from a secure random source
-        return get_random_bytes(16)
-    elif algorithm == "Caesar":
-        # Caesar uses a shift from 1 to 25 (0 would change nothing)
-        return secrets.randbelow(25) + 1
-    else:
-        raise ValueError("Unknown algorithm: " + algorithm)
-
-
-def encrypt_session_key(session_key, server_public_key):
-    """Encrypt the session key with the server's RSA public key."""
-    # The Caesar key is a number, so turn it into bytes before encrypting
-    if isinstance(session_key, int):
-        data = str(session_key).encode()
-    else:
-        data = session_key
-
-    # OAEP is the recommended padding scheme for RSA encryption
-    cipher = PKCS1_OAEP.new(server_public_key)
-    return cipher.encrypt(data)
-
-
-def caesar_shift(text, shift):
-    """Shift every letter in the text by the given amount."""
-    result = ""
-    for ch in text:
-        if ch.isalpha() and ch.isascii():
-            # Pick the starting point of the alphabet for this letter's case
-            base = ord("A") if ch.isupper() else ord("a")
-            result += chr((ord(ch) - base + shift) % 26 + base)
-        else:
-            # Digits, spaces and symbols are left unchanged
-            result += ch
-    return result
-
-
-def caesar_encrypt(text, shift):
-    """Encrypt text by shifting letters forward."""
-    return caesar_shift(text, shift)
-
-
-def caesar_decrypt(text, shift):
-    """Decrypt text by shifting letters backward."""
-    return caesar_shift(text, -shift)
-
-
-def aes_encrypt(text, key):
-    """Encrypt text with AES-CBC and return IV plus ciphertext as hex."""
-    # A fresh random IV is used for every message
-    iv = get_random_bytes(16)
-    cipher = AES.new(key, AES.MODE_CBC, iv)
-
-    # AES works on 16 byte blocks, so pad the text to a full block
-    ciphertext = cipher.encrypt(pad(text.encode(), AES.block_size))
-
-    # The IV is placed in front so the receiver can decrypt, hex keeps it text
-    return (iv + ciphertext).hex()
-
-
-def aes_decrypt(hex_text, key):
-    """Decrypt hex produced by aes_encrypt and return the original text."""
-    raw = bytes.fromhex(hex_text)
-
-    # The first 16 bytes are the IV, the rest is the ciphertext
-    iv, ciphertext = raw[:16], raw[16:]
-    cipher = AES.new(key, AES.MODE_CBC, iv)
-    return unpad(cipher.decrypt(ciphertext), AES.block_size).decode()
-
-
-def encrypt_text(text, algorithm, key):
-    """Encrypt text with whichever algorithm was chosen in setup."""
-    if algorithm == "AES":
-        return aes_encrypt(text, key)
-    return caesar_encrypt(text, key)
-
-
-def decrypt_text(text, algorithm, key):
-    """Decrypt text with whichever algorithm was chosen in setup."""
-    if algorithm == "AES":
-        return aes_decrypt(text, key)
-    return caesar_decrypt(text, key)
-
-
-def send_start(sock, secure):
-    """Send the Start packet (SS) and return the server's reply."""
-    # The last field is 1 if secured communication is required, otherwise 0
-    flag = "1" if secure else "0"
-    packet = "(SS,RFMP,v1.0," + flag + ")"
-    sock.send(packet.encode())
-
-    # Wait for the Confirm-Connection packet (CC) from the server
-    reply = sock.recv(4096).decode()
+    # An empty read means the server closed the connection
+    if not reply:
+        raise ConnectionError("Server closed the connection")
     return reply
 
 
-def secure_setup(sock, algorithm, username):
-    """Run the secured setup phase and return (session_key, private_key)."""
-    # Ask for secured communication and read the CC packet with the server key
-    reply = send_start(sock, True)
-    fields = parse_packet(reply)
-    if fields[0] != "CC" or len(fields) < 2:
+def send_start(sock):
+    """Send the Start packet (SS) and check the Confirm packet (CC)."""
+    # The last field is 0 because secured communication is not used here
+    # ENCRYPTION HOOK: the secured setup (flag 1 and the EC packet) goes here
+    sock.send("(SS,RFMP,v1.0,0)".encode())
+
+    reply = receive(sock)
+    if parse_packet(reply)[0] != "CC":
         raise ValueError("Unexpected reply from server: " + reply)
-    server_public_key = RSA.import_key(fields[1])
 
-    # Prepare the client's keys and encrypt the session key for the server
-    private_key, public_key = generate_rsa_keys()
-    session_key = generate_session_key(algorithm)
-    encrypted_key = encrypt_session_key(session_key, server_public_key)
 
-    # Send the Encryption packet (the key is hex encoded so it fits in text)
-    client_key_pem = public_key.export_key().decode()
-    packet = ("(EC," + algorithm + "," + encrypted_key.hex() + ","
-              + username + ":" + client_key_pem + ")")
+def send_command(sock, command_type, argument):
+    """Send a command packet (CM) and return the server's reply."""
+    # Examples: (CM,prompt,mkdir folder1) and (CM,openRead,data.txt)
+    packet = "(CM," + command_type + "," + argument + ")"
     sock.send(packet.encode())
-    return session_key, private_key
+    return receive(sock)
+
+
+def handle_response(reply):
+    """Show the server's SC (success) or EE (error) reply to the user."""
+    fields = parse_packet(reply)
+    if fields[0] == "SC":
+        print("Success")
+        # Anything after SC is output from the server, so show it
+        if len(fields) > 1:
+            print(",".join(fields[1:]))
+    elif fields[0] == "EE":
+        # Exception packet: (EE, error code, description)
+        code = fields[1] if len(fields) > 1 else "?"
+        description = ",".join(fields[2:])
+        print("Error", code + ":", description)
+    else:
+        print("Unexpected reply:", reply)
+
+
+def open_read(sock, filename):
+    """Ask the server for a file's contents and display them."""
+    reply = send_command(sock, "openRead", filename)
+
+    # An EE packet means the file could not be read
+    if reply.strip().startswith("(EE"):
+        handle_response(reply)
+    else:
+        # ENCRYPTION HOOK: decrypt the contents here when secured
+        print("File contents:")
+        print(reply)
+
+
+def open_write(sock, filename):
+    """Create a file on the server and send its text in a Data packet."""
+    reply = send_command(sock, "openWrite", filename)
+    handle_response(reply)
+
+    # Only send data if the server agreed to open the file
+    if not reply.strip().startswith("(SC"):
+        return
+
+    text = input("Text to write: ")
+
+    # ENCRYPTION HOOK: encrypt the text here when secured
+    sock.send(("(DP," + text + ")").encode())
+    handle_response(receive(sock))
+
+
+def show_menu():
+    """Print the list of options the user can choose from."""
+    print()
+    for key, entry in COMMANDS.items():
+        print(key + ". " + entry[0])
+    print("0. Exit")
+
+
+def command_loop(sock):
+    """Repeat the menu until the user chooses to exit."""
+    while True:
+        show_menu()
+        choice = input("Choose an option: ").strip()
+
+        if choice == "0":
+            break
+
+        if choice not in COMMANDS:
+            print("Invalid option")
+            continue
+
+        label, kind, command, prompt = COMMANDS[choice]
+
+        # Ask for the argument only if the command needs one
+        argument = input(prompt).strip() if prompt else ""
+
+        if kind == "openRead":
+            open_read(sock, argument)
+        elif kind == "openWrite":
+            open_write(sock, argument)
+        else:
+            # Prompt commands send the full command text as the argument
+            full_command = (command + " " + argument).strip()
+            handle_response(send_command(sock, "prompt", full_command))
+
+
+def close_connection(sock):
+    """Send the End packet so the server knows the client has finished."""
+    sock.send("(End)".encode())
+    sock.close()
 
 
 if __name__ == "__main__":
-    # Local test of both ciphers, no server needed for this step
-    message = "Hello RFMP, file data 123!"
+    try:
+        sock = connect()
+    except ConnectionRefusedError:
+        print("Could not connect, check that the server is running")
+        raise SystemExit(1)
+    print("Connected to server")
 
-    caesar_key = generate_session_key("Caesar")
-    scrambled = encrypt_text(message, "Caesar", caesar_key)
-    print("Caesar encrypted:", scrambled)
-    print("Caesar decrypted:", decrypt_text(scrambled, "Caesar", caesar_key))
+    try:
+        # Setup phase, then the operation phase
+        send_start(sock)
+        print("Connection confirmed")
+        command_loop(sock)
+    except ConnectionError as error:
+        print("Connection lost:", error)
 
-    aes_key = generate_session_key("AES")
-    scrambled = encrypt_text(message, "AES", aes_key)
-    print("AES encrypted:", scrambled)
-    print("AES decrypted:", decrypt_text(scrambled, "AES", aes_key))
+    # Closing phase
+    close_connection(sock)
+    
