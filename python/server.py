@@ -85,6 +85,19 @@ def handle_data(client, fields):
     except Exception:
         return make_error("E03")
 
+def handle_open_read(client, filename):
+    """Handle (CM, openRead, filename) — open a file for reading."""
+    if not filename:
+        return make_error("E03")
+    try:
+        with open(filename, "r") as f:
+            content = f.read()
+        return f"(DP,{content})"
+    except FileNotFoundError:
+        return make_error("E02")
+    except Exception:
+        return make_error("E03")
+
 def handle_command(client, fields):
     """Handle a Command (CM) packet: (CM, cmd_type, args...)."""
 
@@ -98,6 +111,8 @@ def handle_command(client, fields):
         return handle_prompt(args)
     elif cmd_type == "openWrite":
         return handle_open_write(client, args)
+    elif cmd_type == "openRead":
+        return handle_open_read(client, args)
     return make_error("E01")
     
 def handle_client(conn, addr):
@@ -120,6 +135,9 @@ def handle_client(conn, addr):
             reply = handle_command(sess,fields)
         elif ptype == "DP":
             reply = handle_data(sess,fields)
+        elif ptype == "End":
+            sess.conn.sendall(b"(SC)")
+            break
         else:
             reply = make_error("E01")
 
