@@ -62,9 +62,32 @@ def handle_prompt(cmd_text):
     except Exception:
         return make_error("E03")
 
+def handle_open_write(client, filename):
+    """Handle (CM, openWrite, filename) — open a file for writing."""
+    if not filename:
+        return make_error("E03")
+    try:
+        client.open_file = open(filename, "w")
+        return "(SC)"
+    except Exception:
+        return make_error("E03")
+
+
+def handle_data(client, fields):
+    """Handle (DP, text) — write text to the currently open file."""
+    if not client.open_file:
+        return make_error("E03")
+    text = fields[0] if fields else ""
+    try:
+        client.open_file.write(text)
+        client.open_file.flush()
+        return "(SC)"
+    except Exception:
+        return make_error("E03")
 
 def handle_command(client, fields):
     """Handle a Command (CM) packet: (CM, cmd_type, args...)."""
+
     if not fields:
         return make_error("E01")
 
@@ -73,7 +96,8 @@ def handle_command(client, fields):
 
     if cmd_type == "prompt":
         return handle_prompt(args)
-
+    elif cmd_type == "openWrite":
+        return handle_open_write(client, args)
     return make_error("E01")
     
 def handle_client(conn, addr):
@@ -94,11 +118,15 @@ def handle_client(conn, addr):
             reply = handle_start(sess,fields)
         elif ptype == "CM":
             reply = handle_command(sess,fields)
+        elif ptype == "DP":
+            reply = handle_data(sess,fields)
         else:
             reply = make_error("E01")
 
         sess.conn.sendall(reply.encode())
-
+        
+    if sess.open_file:
+        sess.open_file.close()
     sess.conn.close()
     print(f"Disconnected:{addr}")
 
