@@ -4,7 +4,7 @@ Author: Siyaa Sathyan (UID:433004781)
 import socket
 import threading
 import subprocess
-import rfmp_crypto as crypto
+import rfmp_crypto as crypto  # Import cryptography helper module
 
 host = "0.0.0.0"
 port = 9999
@@ -16,7 +16,6 @@ ERROR_CODES = {
     "E04": "Encryption error",
 }
 
-
 class Client:
     """Holds the info about a connected client."""
     def __init__(self, conn, addr):
@@ -26,9 +25,14 @@ class Client:
         self.algorithm = None # this client chosen algorithm
         self.client_key = None # this client key
         self.open_file = None # this client open file
+        self.session_key = None # decrypted session key used for symmetric cipher
+        # Generate RSA keypair for this client's setup phase
+        self.rsa_priv, self.rsa_pub = crypto.generate_rsa_keys()
         
+
 def make_error(code):
     return f"(EE,{code},{ERROR_CODES.get(code,'')})" # gives the error code and message E01, E02, E03, E04
+
     
 def handle_start(client, fields):
     """Handle the Start (SS) packet: (SS, RFMP, v1.0, 0|1)."""
@@ -41,11 +45,14 @@ def handle_start(client, fields):
     if protocol != "RFMP":
         return make_error("E01")
     
-    if wants_encryption =="1":
+    if wants_encryption == "1":
         client.secure = True
+        # Clean newline characters in PEM string for protocol transmission
+        pub_key_clean = client.rsa_pub.replace("\n", "||")
+        return f"(CC,{pub_key_clean})"
         
-    #reply with confirmation packet: (SC, RFMP, v1.0, 0|1)
     return "(CC)"
+
 
 def handle_encryption(client, fields):
     """Handle the Encryption (EC) packet: (EC, Algorithm, Encrypted_Session_Key, Username:Client_Public_Key)."""
@@ -65,6 +72,7 @@ def handle_encryption(client, fields):
     except Exception:
         return make_error("E04")
 
+
 def handle_prompt(cmd_text):
     """Run a shell command on the server and return its output."""
     if not cmd_text:
@@ -82,6 +90,7 @@ def handle_prompt(cmd_text):
     except Exception:
         return make_error("E03")
 
+
 def handle_open_write(client, filename):
     """Handle (CM, openWrite, filename) — open a file for writing."""
     if not filename:
@@ -98,12 +107,21 @@ def handle_data(client, fields):
     if not client.open_file:
         return make_error("E03")
     text = fields[0] if fields else ""
+    
+    # Decrypt incoming text payload if session is secured
+    if client.secure and client.algorithm and client.session_key:
+        try:
+            text = crypto.decrypt_payload(client.algorithm, text, client.session_key)
+        except Exception:
+            return make_error("E04")
+
     try:
         client.open_file.write(text)
         client.open_file.flush()
         return "(SC)"
     except Exception:
         return make_error("E03")
+
 
 def handle_open_read(client, filename):
     """Handle (CM, openRead, filename) — open a file for reading."""
@@ -112,15 +130,23 @@ def handle_open_read(client, filename):
     try:
         with open(filename, "r") as f:
             content = f.read()
+
+        # Encrypt outgoing text payload if session is secured
+        if client.secure and client.algorithm and client.session_key:
+            try:
+                content = crypto.encrypt_payload(client.algorithm, content, client.session_key)
+            except Exception:
+                return make_error("E04")
+
         return f"(DP,{content})"
     except FileNotFoundError:
         return make_error("E02")
     except Exception:
         return make_error("E03")
 
+
 def handle_command(client, fields):
     """Handle a Command (CM) packet: (CM, cmd_type, args...)."""
-
     if not fields:
         return make_error("E01")
 
@@ -134,6 +160,7 @@ def handle_command(client, fields):
     elif cmd_type == "openRead":
         return handle_open_read(client, args)
     return make_error("E01")
+
     
 def handle_client(conn, addr):
     """Serve one client connection"""
@@ -141,7 +168,7 @@ def handle_client(conn, addr):
     print(f"Connected by {addr}")
 
     while True:
-        data = sess.conn.recv(2024)
+        data = sess.conn.recv(4096)
         if not data:
             break
 
@@ -150,11 +177,13 @@ def handle_client(conn, addr):
         print(f"Client sent: {raw_packet}")
 
         if ptype == "SS":
-            reply = handle_start(sess,fields)
+            reply = handle_start(sess, fields)
+        elif ptype == "EC":
+            reply = handle_encryption(sess, fields)
         elif ptype == "CM":
-            reply = handle_command(sess,fields)
+            reply = handle_command(sess, fields)
         elif ptype == "DP":
-            reply = handle_data(sess,fields)
+            reply = handle_data(sess, fields)
         elif ptype == "End":
             sess.conn.sendall(b"(SC)")
             break
@@ -180,6 +209,7 @@ def main():
             conn, addr = s.accept()  # Accept a new connection
             threading.Thread(target=handle_client, args=(conn, addr), daemon=True).start()
 
+
 def parse_packet(raw):
     # Implementation for parsing the raw packet data
     """splits "(TYPE, f1, f2)" into tuples of ("TYPE", ["f1", "f2"])"""
@@ -192,12 +222,13 @@ def parse_packet(raw):
         parts = [p.strip() for p in raw.split(",", 1)]  # Split by comma and strip whitespace
         
         if not parts or not parts[0]:  # Check if the first part (TYPE) is empty
-            return "",[]  # Returns empty values if the packet type is missing
+            return "", []  # Returns empty values if the packet type is missing
         
         ptype = parts[0]  # The first part is the packet type
         rest = parts[1] if len(parts) > 1 else ""  # The rest is the remaining data
         fields = [f.strip() for f in rest.split(",")] if rest else []  # Splits the rest into fields
         return ptype, fields  # Return the packet type and fields as a tuple
+
 
 if __name__ == "__main__":
     main()  # Call the main function to start the server
