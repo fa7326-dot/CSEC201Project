@@ -16,6 +16,7 @@ ERROR_CODES = {
     "E04": "Encryption error",
 }
 
+
 class Client:
     """Holds the info about a connected client."""
     def __init__(self, conn, addr):
@@ -168,7 +169,7 @@ def handle_client(conn, addr):
     print(f"Connected by {addr}")
 
     while True:
-        data = sess.conn.recv(65536)
+        data = sess.conn.recv(4096)
         if not data:
             break
 
