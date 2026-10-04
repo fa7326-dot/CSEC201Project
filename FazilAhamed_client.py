@@ -1,8 +1,9 @@
 # RFMP client (Remote File Management Protocol)
 # CSEC-201 socket project
-# Encryption is handled separately by the team (see the marked spots below)
+# Encryption is handled via rfmp_crypto helper module
 
 import socket
+import rfmp_crypto as crypto
 
 # Address and port of the RFMP server (localhost for testing)
 HOST = "127.0.0.1"
@@ -28,6 +29,16 @@ COMMANDS = {
     "12": ("pwd (current folder)", "prompt", "pwd", None),
 }
 
+# Global session security state
+SECURITY_STATE = {
+    "enabled": False,
+    "algorithm": None,      # "AES" or "Caesar"
+    "session_key": "SecretKey123", # Symmetric key used for payload encryption
+    "server_pub_key": None,
+    "client_priv_key": None,
+    "client_pub_key": None,
+}
+
 
 def connect():
     """Create a TCP socket and connect it to the server."""
@@ -45,6 +56,14 @@ def parse_packet(text):
         text = text[1:-1]
 
     # Split on commas and trim any spaces around each field
+    parts = [p.strip() for p in text.split(",", 1)]
+    ptype = parts[0]
+    rest = parts[1] if len(parts) > 1 else ""
+    
+    if rest and ptype in ["CC", "EC", "DP"]:
+        fields = [f.strip() for f in rest.split(",")]
+        return [ptype] + fields
+        
     return [field.strip() for field in text.split(",")]
 
 
@@ -60,13 +79,53 @@ def receive(sock):
 
 def send_start(sock):
     """Send the Start packet (SS) and check the Confirm packet (CC)."""
-    # The last field is 0 because secured communication is not used here
-    # ENCRYPTION HOOK: the secured setup (flag 1 and the EC packet) goes here
-    sock.send("(SS,RFMP,v1.0,0)".encode())
+    choice = input("Enable encryption? (y/n): ").strip().lower()
 
-    reply = receive(sock)
-    if parse_packet(reply)[0] != "CC":
-        raise ValueError("Unexpected reply from server: " + reply)
+    if choice == "y":
+        SECURITY_STATE["enabled"] = True
+        alg_choice = input("Choose algorithm (1. AES, 2. Caesar): ").strip()
+        SECURITY_STATE["algorithm"] = "AES" if alg_choice == "1" else "Caesar"
+
+        # Generate local RSA keypair
+        priv, pub = crypto.generate_rsa_keys()
+        SECURITY_STATE["client_priv_key"] = priv
+        SECURITY_STATE["client_pub_key"] = pub
+
+        # 1. Send Start packet asking for security (SS, RFMP, v1.0, 1)
+        sock.send("(SS,RFMP,v1.0,1)".encode())
+
+        # 2. Receive CC packet containing server's RSA public key
+        reply = receive(sock)
+        fields = parse_packet(reply)
+        
+        if fields[0] != "CC" or len(fields) < 2:
+            raise ValueError("Expected (CC, server_public_key) from server: " + reply)
+
+        # Restore server RSA public key PEM format
+        SECURITY_STATE["server_pub_key"] = fields[1].replace("||", "\n")
+
+        # 3. Encrypt session key with server's RSA Public Key
+        enc_session_key = crypto.rsa_encrypt(
+            SECURITY_STATE["server_pub_key"], 
+            SECURITY_STATE["session_key"]
+        )
+
+        # 4. Send Encryption Packet (EC)
+        client_pub_clean = SECURITY_STATE["client_pub_key"].replace("\n", "||")
+        ec_packet = f"(EC,{SECURITY_STATE['algorithm']},{enc_session_key},user:{client_pub_clean})"
+        sock.send(ec_packet.encode())
+
+        # 5. Receive confirmation for EC packet
+        ec_reply = receive(sock)
+        if parse_packet(ec_reply)[0] != "SC":
+            raise ValueError("Encryption handshake failed: " + ec_reply)
+
+    else:
+        # Non-secured communication
+        sock.send("(SS,RFMP,v1.0,0)".encode())
+        reply = receive(sock)
+        if parse_packet(reply)[0] != "CC":
+            raise ValueError("Unexpected reply from server: " + reply)
 
 
 def send_command(sock, command_type, argument):
@@ -102,9 +161,26 @@ def open_read(sock, filename):
     if reply.strip().startswith("(EE"):
         handle_response(reply)
     else:
-        # ENCRYPTION HOOK: decrypt the contents here when secured
-        print("File contents:")
-        print(reply)
+        fields = parse_packet(reply)
+        if fields[0] == "DP" and len(fields) > 1:
+            content = fields[1]
+            
+            # ENCRYPTION HOOK: decrypt the contents here when secured
+            if SECURITY_STATE["enabled"]:
+                try:
+                    content = crypto.decrypt_payload(
+                        SECURITY_STATE["algorithm"], 
+                        content, 
+                        SECURITY_STATE["session_key"]
+                    )
+                except Exception as e:
+                    print("Decryption Error:", e)
+                    return
+
+            print("File contents:")
+            print(content)
+        else:
+            handle_response(reply)
 
 
 def open_write(sock, filename):
@@ -119,6 +195,17 @@ def open_write(sock, filename):
     text = input("Text to write: ")
 
     # ENCRYPTION HOOK: encrypt the text here when secured
+    if SECURITY_STATE["enabled"]:
+        try:
+            text = crypto.encrypt_payload(
+                SECURITY_STATE["algorithm"], 
+                text, 
+                SECURITY_STATE["session_key"]
+            )
+        except Exception as e:
+            print("Encryption Error:", e)
+            return
+
     sock.send(("(DP," + text + ")").encode())
     handle_response(receive(sock))
 
@@ -183,4 +270,3 @@ if __name__ == "__main__":
 
     # Closing phase
     close_connection(sock)
-    
