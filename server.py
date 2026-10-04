@@ -168,7 +168,7 @@ def handle_client(conn, addr):
     print(f"Connected by {addr}")
 
     while True:
-        data = sess.conn.recv(4096)
+        data = sess.conn.recv(65536)
         if not data:
             break
 
