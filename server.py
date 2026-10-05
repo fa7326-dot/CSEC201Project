@@ -4,6 +4,7 @@ Author: Siyaa Sathyan (UID:433004781)
 import socket
 import threading
 import subprocess
+import os
 import rfmp_crypto as crypto  # Import cryptography helper module
 
 host = "0.0.0.0"
@@ -78,10 +79,21 @@ def handle_prompt(cmd_text):
     """Run a shell command on the server and return its output."""
     if not cmd_text:
         return make_error("E03")
+    cmd_parts = cmd_text.strip().split(maxsplit=1)
+    base_cmd = cmd_parts[0]
+    args = cmd_parts[1] if len(cmd_parts) > 1 else ""
+
+    # Handle 'cd' internally to update the server session's working directory
+    if base_cmd == "cd":
+        try:
+            target_dir = args if args else os.path.expanduser("~")
+            os.chdir(target_dir)  # Change directory for the current server process
+            return f"(SC,Changed directory to {os.getcwd()})"
+        except Exception as e:
+            return make_error("E03")
     try:
         result = subprocess.run(
-            cmd_text,
-            shell=True,
+            ["powershell", "-Command", cmd_text],
             capture_output=True,
             text=True,
             timeout=15,
